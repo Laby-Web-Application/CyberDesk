@@ -1,0 +1,6 @@
+# Zaakceptowane ryzyko, przeanalizowane 2026-11-22.
+# CVE-2025-47273 - path traversal w setuptools PackageIndex (sciezka pobierania easy_install).
+# Niemozliwe do wykorzystania w tym wdrozeniu: dzialajacy kontener serwuje aplikacje przez
+# gunicorn i nigdy nie uzywa setuptools do pobierania/instalacji paczek. Aktywnie zainstalowany
+# setuptools jest juz w wersji z latka (84.x); to znalezisko to martwa kopia w obrazie bazowym.
+CVE-2025-47273
