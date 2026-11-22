@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CyberDesk CI/CD bootstrap (L5/L6) - stawiany RAZ, recznie, przez admina konta.
+  GitHub OIDC (bez dlugozyjacych kluczy) + ECR + rola deployu dla GitHub Actions
+  + rola wykonawcza CloudFormation. Niezalezny od stacku aplikacji (brak VPC i domeny).
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: Szymni/CyberDesk
+    Description: owner/repo, ktore moze przyjac role deployu
+  GitHubEnvironment:
+    Type: String
+    Default: production
+    Description: Environment w GitHub (z wymaganym zatwierdzeniem) - tylko joby z niego dostaja dostep do AWS
+  AppStackName:
+    Type: String
+    Default: CyberDesk
+  EcrRepositoryName:
+    Type: String
+    Default: cyberdesk
+  ImageTagParameterName:
+    Type: String
+    Default: /cyberdesk/image-tag
+  ExistingOIDCProviderArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Zostaw puste. Wypelnij tylko jesli na koncie JUZ istnieje provider
+      token.actions.githubusercontent.com (IAM -> Identity providers) - wtedy podaj jego ARN.
+
+Conditions:
+  CreateOIDCProvider: !Equals [!Ref ExistingOIDCProviderArn, '']
+
+Resources:
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  EcrRepo:
+    Type: AWS::ECR::Repository
+    Metadata:
+      checkov:
+        skip:
+          - id: CKV_AWS_136
+            comment: Szyfrowanie AES-256 zarzadzane przez AWS zamiast wlasnego KMS - koszt
+    Properties:
+      RepositoryName: !Ref EcrRepositoryName
+      ImageTagMutability: IMMUTABLE        # tag = SHA commita, nie da sie go podmienic
+      ImageScanningConfiguration:
+        ScanOnPush: true                   # drugi, niezalezny skan obrazu po stronie AWS
+      EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"trzymaj 10 ostatnich obrazow",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},
+          "action":{"type":"expire"}}]}
+
+  # Rola, ktora przyjmuje CloudFormation przy zmianach stacku aplikacji.
+  # GitHub NIE moze jej uzyc bezposrednio - moze jedynie przekazac ja CloudFormation (iam:PassRole).
+  CfnExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cyberdesk-cfn-execution
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess
+
+  GitHubActionsDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cyberdesk-gha-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateOIDCProvider, !Ref GitHubOIDCProvider, !Ref ExistingOIDCProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                # Tylko joby z Environment "production" (czyli po recznym zatwierdzeniu), tylko z tego repo.
+                # Dwie pisownie, bo warunek rozroznia wielkosc liter.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubRepo}:environment:${GitHubEnvironment}
+                  - !Sub
+                    - repo:${Lower}:environment:${GitHubEnvironment}
+                    - Lower: szymni/cyberdesk
+      Policies:
+        - PolicyName: cyberdesk-deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: EcrPushPullAppRepoOnly
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:DescribeImages
+                Resource: !GetAtt EcrRepo.Arn
+              - Sid: CloudFormationAppStackOnly
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:ListChangeSets
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:GetTemplateSummary
+                Resource:
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AppStackName}/*
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:changeSet/*/*
+              - Sid: PassOnlyCfnExecutionRoleToCloudFormation
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CfnExecutionRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+              - Sid: ResolvePublicAmiParameter
+                Effect: Allow
+                Action: [ssm:GetParameters, ssm:GetParameter]
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}::parameter/aws/service/*
+              - Sid: PublishImageTag
+                Effect: Allow
+                Action: [ssm:PutParameter, ssm:GetParameter]
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ImageTagParameterName}
+              - Sid: RunCommandDocument
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript
+              - Sid: RunCommandOnlyOnCyberDeskInstancesA
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+                Condition:
+                  StringEquals:
+                    ssm:resourceTag/Project: CyberDesk
+              - Sid: RunCommandOnlyOnCyberDeskInstancesB
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/Project: CyberDesk
+              - Sid: ObserveRollout
+                Effect: Allow
+                Action:
+                  - ssm:ListCommandInvocations
+                  - ssm:GetCommandInvocation
+                  - ssm:DescribeInstanceInformation
+                  - ec2:DescribeInstances
+                Resource: '*'
+
+Outputs:
+  AwsDeployRoleArn:
+    Description: GitHub -> Settings -> Variables -> AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt GitHubActionsDeployRole.Arn
+  CfnExecutionRoleArn:
+    Description: GitHub -> Settings -> Variables -> CFN_EXECUTION_ROLE_ARN
+    Value: !GetAtt CfnExecutionRole.Arn
+  EcrRepositoryName:
+    Description: GitHub -> Settings -> Variables -> ECR_REPOSITORY
+    Value: !Ref EcrRepo

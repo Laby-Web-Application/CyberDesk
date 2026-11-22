@@ -1,0 +1,142 @@
+# CI - uruchamiane przy kazdym PR i pushu na main.
+# Kazdy job jest brama: czerwony = PR nie moze zostac zmergowany (branch protection),
+# a deploy (deploy.yml) startuje tylko po zielonym CI na main.
+# Akcje sa przypiete do pelnych SHA commitow (nie tagow) - tagi mozna przestawic,
+# co wykorzystano w ataku na aquasecurity/trivy-action w marcu 2026.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt -r requirements-ci.txt
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Unit & security tests (pytest)
+        run: python -m pytest tests -q
+
+  sast:
+    name: SAST & dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-ci.txt
+      - name: SAST - Bandit (medium+ severity fails the build)
+        run: bandit -r . -ll -x ./tests
+      - name: SCA - pip-audit (known CVEs in dependencies)
+        run: pip-audit -r requirements.txt
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+          # Wymagane tylko gdy wlascicielem repo jest organizacja (nie konto osobiste):
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  iac:
+    name: IaC scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-ci.txt
+      - name: CloudFormation lint
+        run: cfn-lint cyberdesk-template.yaml infra/cyberdesk-cicd.yaml
+      - name: Checkov (misconfigurations; accepted risks are documented in the templates)
+        run: checkov -f cyberdesk-template.yaml -f infra/cyberdesk-cicd.yaml --framework cloudformation --compact --quiet
+
+  image:
+    name: Build & scan image
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build -t cyberdesk:${{ github.sha }} .
+      - name: Container scan - Trivy (HIGH/CRITICAL with an available fix fails the build)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 (installs Trivy v0.69.3)
+        with:
+          image-ref: cyberdesk:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+  dast:
+    name: DAST (OWASP ZAP)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Start app + PostgreSQL (docker compose, throwaway credentials)
+        run: |
+          python3 setup_local.py
+          docker compose up -d --build --wait --wait-timeout 240
+          curl -fsS http://localhost:5000/health
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        with:
+          target: http://localhost:5000
+          rules_file_name: .zap/rules.tsv
+          cmd_options: '-I'
+          fail_action: true
+          allow_issue_writing: false
+          artifact_name: zap-report
+      - name: App logs
+        if: always()
+        run: docker compose logs --no-color web | tail -100
+      - name: Stop
+        if: always()
+        run: docker compose down -v

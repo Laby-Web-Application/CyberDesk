@@ -26,3 +26,7 @@ python -m pytest tests -q
 ```
 
 Testy korzystają z SQLite. Szczegóły weryfikacji są w [VALIDATION.md](VALIDATION.md).
+
+## CI/CD i wdrożenie na AWS
+
+Pipeline (testy, SAST, SCA, skan sekretów, IaC, obrazu i DAST) oraz wdrożenie na AWS z ręcznym zatwierdzeniem są opisane w [CICD.md](CICD.md), razem z jednorazowym setupem.

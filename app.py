@@ -16,6 +16,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask import Flask, abort, current_app, flash, g, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 ROOT = Path(__file__).resolve().parent
@@ -166,6 +167,11 @@ def create_app(test_config=None):
         SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE')=='1', PERMANENT_SESSION_LIFETIME=timedelta(hours=2), MAX_CONTENT_LENGTH=65536)
     if test_config:
         app.config.update(test_config)
+    if os.environ.get('TRUST_PROXY')=='1':
+        # Behind exactly one trusted reverse proxy (AWS ALB): take client IP and scheme from X-Forwarded-*.
+        # Without it every user shares the ALB address (shared login lockout) and HSTS is never sent.
+        # Never enable without a proxy in front - clients could then spoof X-Forwarded-For.
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
     if not app.config['SECRET_KEY']:
         instance = ROOT/'instance'; instance.mkdir(exist_ok=True, mode=0o700)
         keyfile = instance/'.session-key'
@@ -246,9 +252,11 @@ def create_app(test_config=None):
         where=' AND '.join(conditions) or '1=1'
         page=max(1,request.args.get('page',1,type=int))
         with database() as db:
-            total=db.one('SELECT COUNT(*) AS n FROM reports r WHERE '+where,params)['n']
+            # nosec justification: `where` joins only hard-coded fragments (column names from fixed tuples);
+            # every user-supplied value is passed separately as a bound parameter.
+            total=db.one('SELECT COUNT(*) AS n FROM reports r WHERE '+where,params)['n']  # nosec B608
             pages=max(1,(total+9)//10); page=min(page,pages)
-            reports=db.all('SELECT r.*, (SELECT COUNT(*) FROM comments c WHERE c.report_id=r.id) AS comment_count FROM reports r WHERE '+where+' ORDER BY r.created_at DESC,r.id DESC LIMIT %s OFFSET %s',params+[10,(page-1)*10])
+            reports=db.all('SELECT r.*, (SELECT COUNT(*) FROM comments c WHERE c.report_id=r.id) AS comment_count FROM reports r WHERE '+where+' ORDER BY r.created_at DESC,r.id DESC LIMIT %s OFFSET %s',params+[10,(page-1)*10])  # nosec B608
             stats=db.one("SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN status <> 'Naprawione' THEN 1 ELSE 0 END),0) AS active, COALESCE(SUM(CASE WHEN status = 'Naprawione' THEN 1 ELSE 0 END),0) AS fixed, COALESCE(SUM(CASE WHEN severity = 'Krytyczna' AND status <> 'Naprawione' THEN 1 ELSE 0 END),0) AS critical FROM reports WHERE approved=TRUE")
             pending=db.one('SELECT COUNT(*) AS n FROM reports WHERE approved=FALSE')['n'] if is_admin() else None
         def page_url(n):
@@ -467,4 +475,5 @@ def create_app(test_config=None):
 
 app=create_app()
 if __name__=='__main__':
-    app.run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)),debug=False)
+    # Dev server only; production runs gunicorn from the Dockerfile.
+    app.run(host=os.environ.get('HOST','127.0.0.1'),port=int(os.environ.get('PORT',5000)),debug=False)

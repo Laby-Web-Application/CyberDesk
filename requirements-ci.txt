@@ -1,0 +1,7 @@
+# Security / quality tools used by .github/workflows/ci.yml - pinned so CI results are reproducible
+# and a compromised "latest" release cannot silently enter the pipeline.
+ruff==0.17.6
+bandit==1.9.4
+pip-audit==2.10.1
+cfn-lint==1.61.0
+checkov==3.4.6
