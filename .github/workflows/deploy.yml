@@ -1,0 +1,106 @@
+# Deploy na produkcje (AWS). Przeplyw:
+#   merge do main -> CI (testy + skany) -> [ZIELONE?] -> ten workflow -> [RECZNE ZATWIERDZENIE]
+#   -> infrastruktura (CloudFormation) -> obraz do ECR -> rolling deploy przez SSM -> smoke test.
+# Czerwone CI = ten workflow w ogole nie rusza. Brak zatwierdzenia = nic nie trafia do AWS.
+# Dostep do AWS przez OIDC: zadnych kluczy w GitHubie; rola dziala tylko w Environment "production".
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:          # reczny redeploy aktualnego main
+
+permissions:
+  contents: read
+  id-token: write             # token OIDC do przyjecia roli w AWS
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false   # nigdy nie przerywaj trwajacego wdrozenia
+
+jobs:
+  deploy:
+    name: Deploy to AWS
+    # Tylko po udanym CI dla pushu na main (nie dla PR-ow), albo recznie.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment:
+      name: production        # tu GitHub wstrzymuje job do recznego zatwierdzenia
+      url: https://${{ vars.APP_DOMAIN || 'app.cyberdesk.com.pl' }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-north-1' }}
+      STACK_NAME: ${{ vars.STACK_NAME || 'CyberDesk' }}
+      APP_DOMAIN: ${{ vars.APP_DOMAIN || 'app.cyberdesk.com.pl' }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'cyberdesk' }}
+      DEMO_MODE: ${{ vars.DEMO_MODE || '1' }}
+      DB_MULTI_AZ: ${{ vars.DB_MULTI_AZ || 'true' }}
+      IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Check required repository variables
+        env:
+          ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          CFN_ROLE: ${{ vars.CFN_EXECUTION_ROLE_ARN }}
+          ZONE: ${{ vars.HOSTED_ZONE_ID }}
+        run: |
+          missing=0
+          for v in ROLE CFN_ROLE ZONE; do [ -n "${!v}" ] || { echo "::error::Brak zmiennej repo dla $v (zob. CICD.md)"; missing=1; }; done
+          exit $missing
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.IMAGE_TAG }}
+          persist-credentials: false
+
+      - name: AWS credentials (OIDC, short-lived)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: cyberdesk-deploy-${{ github.run_id }}
+
+      - name: Infrastructure - CloudFormation (no-op when the template did not change)
+        env:
+          CFN_ROLE: ${{ vars.CFN_EXECUTION_ROLE_ARN }}
+          ZONE: ${{ vars.HOSTED_ZONE_ID }}
+        run: |
+          aws cloudformation deploy \
+            --stack-name "$STACK_NAME" \
+            --template-file cyberdesk-template.yaml \
+            --role-arn "$CFN_ROLE" \
+            --capabilities CAPABILITY_IAM \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              HostedZoneId="$ZONE" DomainName="$APP_DOMAIN" \
+              EcrRepositoryName="$ECR_REPOSITORY" DemoMode="$DEMO_MODE" DBMultiAZ="$DB_MULTI_AZ"
+
+      - name: Build & push image to ECR (tag = commit SHA, immutable)
+        run: |
+          REGISTRY="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com"
+          IMAGE="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "Obraz $IMAGE_TAG juz jest w ECR - pomijam build"
+          else
+            aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+            docker build -t "$IMAGE" .
+            docker push "$IMAGE"
+          fi
+
+      - name: Publish version (new Auto Scaling instances start this tag)
+        run: aws ssm put-parameter --name /cyberdesk/image-tag --type String --value "$IMAGE_TAG" --overwrite
+
+      - name: Rolling deploy via SSM Run Command
+        run: bash infra/rollout.sh "$IMAGE_TAG"
+
+      - name: Smoke test through the public HTTPS endpoint
+        run: |
+          for i in $(seq 1 40); do
+            body=$(curl -fsS --max-time 10 "https://$APP_DOMAIN/health" 2>/dev/null || true)
+            if [ "$body" = '{"status":"ok"}' ]; then echo "OK: https://$APP_DOMAIN/health -> $body"; exit 0; fi
+            echo "czekam na https://$APP_DOMAIN ($i/40)"; sleep 15
+          done
+          echo "::error::Aplikacja nie odpowiada poprawnie pod https://$APP_DOMAIN/health"; exit 1

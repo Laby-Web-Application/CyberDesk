@@ -17,3 +17,9 @@ Rejestracja z walidacją i unikalnością loginu, próba nadania sobie roli admi
 W środowisku przygotowania projektu Docker nie jest zainstalowany, dlatego **nie wykonano `docker compose up` i nie zweryfikowano działających kontenerów PostgreSQL/Gunicorn**. Próba uruchomienia lokalnego PostgreSQL bez Dockera również zatrzymała się na ograniczeniach środowiska dotyczących tworzenia użytkownika systemowego. Kod adaptera PostgreSQL i migracji jest przygotowany; jego działanie na prawdziwym PostgreSQL pozostaje do sprawdzenia po uruchomieniu paczki w Dockerze. Podgląd SQLite nie stanowi takiego testu.
 
 Testy są ukierunkowane na wskazane wymagania i podstawowe zabezpieczenia. Nie zastępują pełnego audytu ani konfiguracji środowiska produkcyjnego.
+
+# Uzupełnienie — 22 listopada 2026 (L5/L6)
+
+- Ścieżka PostgreSQL została sprawdzona na prawdziwym PostgreSQL 16 skonfigurowanym jak RDS (właściciel schematu bez uprawnień superusera, z `CREATEROLE`): trzy równoległe uruchomienia `scripts/bootstrap_db.py`, start `entrypoint.sh` + gunicorn jako `cyberdesk_app`, odpowiedź `/health`, brak możliwości `DROP TABLE` dla użytkownika aplikacji, limit logowań liczony per klient za proxy.
+- 28 testów (w tym 3 nowe dla pracy za load balancerem) zakończonych powodzeniem.
+- Obrazu Dockera nie zbudowano w środowisku przygotowania (brak dostępu do Docker Hub) – budowa obrazu, skan Trivy i skan DAST (docker compose + ZAP) wykonują się w GitHub Actions.

@@ -1,0 +1,10 @@
+# Lint configuration used by CI (and locally: `ruff check .`).
+# Pinned explicitly so results do not depend on a developer's global ruff config.
+target-version = "py312"
+line-length = 200
+
+[lint]
+# Errors that indicate real bugs: syntax/runtime (E9), statements (E7), imports (E4), pyflakes (F).
+select = ["E4", "E7", "E9", "F"]
+# The codebase intentionally uses compact one-line statements (`a(); b()`, `if x: y`).
+ignore = ["E701", "E702"]

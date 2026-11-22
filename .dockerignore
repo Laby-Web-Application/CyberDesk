@@ -27,3 +27,9 @@ __pycache__/
 
 
 
+# CI/CD and infrastructure (not needed inside the app image)
+.github/
+.zap/
+infra/
+cyberdesk-template.yaml
+ruff.toml
