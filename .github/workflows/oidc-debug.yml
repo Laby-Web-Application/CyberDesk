@@ -1,0 +1,17 @@
+name: OIDC Debug
+on: [push, workflow_dispatch]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print OIDC claims
+        run: |
+          token=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r '.value')
+          claims=$(echo "$token" | cut -d. -f2)
+          case $(( ${#claims} % 4 )) in 2) claims="$claims==";; 3) claims="$claims=";; esac
+          echo "$claims" | tr '_-' '/+' | base64 -d 2>/dev/null \
+            | jq '{iss, aud, sub, repository, repository_owner, ref, environment, workflow_ref}'
