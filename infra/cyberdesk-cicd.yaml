@@ -7,7 +7,7 @@ Description: >-
 Parameters:
   GitHubRepo:
     Type: String
-    Default: Szymni/CyberDesk
+    Default: Laby-Web-Application/CyberDesk
     Description: owner/repo, ktore moze przyjac role deployu
   GitHubEnvironment:
     Type: String
@@ -98,7 +98,7 @@ Resources:
                   - !Sub repo:${GitHubRepo}:environment:${GitHubEnvironment}
                   - !Sub
                     - repo:${Lower}:environment:${GitHubEnvironment}
-                    - Lower: szymni/cyberdesk
+                    - Lower: laby-web-application/cyberdesk
       Policies:
         - PolicyName: cyberdesk-deploy
           PolicyDocument:
