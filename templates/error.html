@@ -1,1 +1,26 @@
-{% extends 'base.html' %}{% block title %}Błąd {{ code }}{% endblock %}{% block content %}<section class="panel error-panel"><div class="error-number">{{ code }}</div><h1>{{ message }}</h1><p>Możesz wrócić do listy zgłoszeń i spróbować ponownie.</p><a class="button button-primary" href="{{ url_for('index') }}">{{ icon('arrow-left') }} Wróć do zgłoszeń</a></section>{% endblock %}
+{# =============================================================================
+   CyberDesk Custom HTTP Error Page (templates/error.html)
+   Used by: ALL environments
+
+   Rendered by: `http_error()` and `internal_error()` in app.py
+   Receives:
+     - `code`    : HTTP status code (e.g., 400, 403, 404, 405, 413, 500)
+     - `message` : Safe, user-friendly Polish explanation (never a stack trace)
+   ============================================================================= #}
+
+{% extends 'base.html' %}
+
+{% block title %}Błąd {{ code }}{% endblock %}
+{# Override the topbar breadcrumb so it reflects the error instead of "Centrum zgłoszeń". #}
+{% block breadcrumb %}Błąd {{ code }}{% endblock %}
+
+{% block content %}
+  <section class="panel error-panel">
+    <div class="error-number">{{ code }}</div>
+    <h1>{{ message }}</h1>
+    <p>Możesz wrócić do listy zgłoszeń i spróbować ponownie.</p>
+    <a class="button button-primary" href="{{ url_for('index') }}">
+      {{ icon('arrow-left') }} Wróć do zgłoszeń
+    </a>
+  </section>
+{% endblock %}
