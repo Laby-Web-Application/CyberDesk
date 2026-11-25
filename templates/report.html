@@ -1,14 +1,210 @@
-{% extends 'base.html' %}{% block title %}CD-{{ '%03d'|format(report.id) }} · {{ report.title }}{% endblock %}
+{# =============================================================================
+   CyberDesk Vulnerability Report Detail & Moderation View (templates/report.html)
+   Used by: ALL environments
+
+   Rendered by: `report_detail(report_id)` in app.py (`/reports/<int:report_id>`)
+   Security Guarantees:
+     - IDOR Defense: `visible_report()` in app.py returns 404 before rendering
+       if a regular user tries to view someone else's unapproved report.
+     - XSS Defense: `report.title`, `report.description`, and `c.content` are
+       all auto-escaped by Jinja2 (rendered as safe plain text, never raw HTML).
+     - CSRF Defense: Every state-changing action (add/delete comment, approve,
+       change status, delete report) is a POST form containing `{{ csrf() }}`.
+   ============================================================================= #}
+
+{% extends 'base.html' %}
+
+{% block title %}CD-{{ '%03d'|format(report.id) }} · {{ report.title }}{% endblock %}
 {% block breadcrumb %}Szczegóły zgłoszenia{% endblock %}
-{% block content %}<a class="back-link" href="{{ url_for('admin_panel') if admin and not report.approved else url_for('my_reports') if not report.approved else url_for('index') }}">{{ icon('arrow-left') }} Wróć do listy zgłoszeń</a>
-<div class="detail-heading"><div class="eyebrow">CD-{{ '%03d'|format(report.id) }} <span class="separator">/</span> ZGŁOSZENIE PODATNOŚCI</div><h1>{{ report.title }}</h1><div class="detail-tags">{{ badge(report) }}{{ status_badge(report) }}{% if not report.approved %}<span class="pending-label">{{ icon('clock') }} Oczekuje na akceptację</span>{% endif %}</div></div>
-{% if not report.approved %}<div class="inline-info pending-info">{{ icon('info') }}<span>To zgłoszenie jest widoczne tylko dla autora i administratora. Komentowanie będzie dostępne po publikacji.</span></div>{% endif %}
-<div class="detail-layout"><div><section class="panel detail-description"><div class="section-title">{{ icon('file') }}<h2>Opis podatności</h2></div><div class="report-description">{{ report.description }}</div></section>
-<section class="panel comments-panel" id="comments"><div class="section-title">{{ icon('message') }}<h2>Dyskusja <span class="count">{{ comments|length }}</span></h2></div>
-{% for c in comments %}<article class="comment"><span class="avatar comment-avatar">{{ c.author[0]|upper }}</span><div class="comment-body"><div class="comment-meta"><strong>{{ c.author }}</strong><span>{{ c.created_at|shortdate }}</span>{% if g.user and (admin or c.author==g.user.username) %}<form method="post" action="{{ url_for('delete_comment',comment_id=c.id) }}" data-confirm="Usunąć ten komentarz?">{{ csrf() }}<button class="text-button danger-text" aria-label="Usuń komentarz {{ c.id }}">Usuń</button></form>{% endif %}</div><p>{{ c.content }}</p></div></article>{% else %}<p class="muted comment-empty">Nie ma jeszcze komentarzy. Rozpocznij dyskusję.</p>{% endfor %}
-{% if g.user and report.approved %}<form method="post" action="{{ url_for('add_comment',report_id=report.id) }}" class="stack-form comment-form">{{ csrf() }}<label for="content">Dodaj komentarz</label><textarea id="content" name="content" required maxlength="2000" rows="3" placeholder="Dodaj informacje, które pomogą w analizie…"></textarea><div class="comment-submit"><small>Maksymalnie 2000 znaków.</small><button class="button button-primary button-small">{{ icon('send') }} Dodaj komentarz</button></div></form>{% elif not g.user %}<div class="inline-info">{{ icon('login') }}<span><a href="{{ url_for('login') }}">Zaloguj się</a>, aby dołączyć do dyskusji.</span></div>{% endif %}</section></div>
-<aside class="detail-aside"><section class="panel metadata-panel"><h2>Szczegóły</h2><dl><dt>Autor zgłoszenia</dt><dd class="author-cell"><span class="mini-avatar">{{ report.author[0]|upper }}</span>{{ report.author }}</dd><dt>Utworzono</dt><dd>{{ report.created_at|shortdate }}</dd><dt>Ostatnia zmiana</dt><dd>{{ report.updated_at|shortdate }}</dd><dt>Publikacja</dt><dd><span class="dot {{ 'green-dot' if report.approved else 'amber-dot' }}"></span>{{ 'Opublikowane' if report.approved else 'Do akceptacji' }}</dd></dl>
-{% if can_edit %}<a class="button button-light full-width" href="{{ url_for('edit_report',report_id=report.id) }}">{{ icon('edit') }} Edytuj zgłoszenie</a>{% endif %}</section>
-{% if admin %}<section class="panel moderation-panel"><h2>{{ icon('check-shield') }} Moderacja</h2>{% if not report.approved %}<form method="post" action="{{ url_for('approve_report',report_id=report.id) }}">{{ csrf() }}<button class="button button-primary full-width">{{ icon('check-circle') }} Zaakceptuj i opublikuj</button></form>{% endif %}
-<form method="post" action="{{ url_for('change_status',report_id=report.id) }}" class="stack-form">{{ csrf() }}<div><label for="report_status">Status zgłoszenia</label><select id="report_status" name="status">{% for s in statuses %}<option {{ 'selected' if report.status==s }}>{{ s }}</option>{% endfor %}</select></div><button class="button button-light full-width">Zapisz status</button></form>
-<form method="post" action="{{ url_for('delete_report',report_id=report.id) }}" class="delete-form" data-confirm="Usunąć zgłoszenie i wszystkie jego komentarze? Tej operacji nie można cofnąć.">{{ csrf() }}<button class="button button-danger-light full-width">{{ icon('trash') }} {{ 'Odrzuć i usuń' if not report.approved else 'Usuń zgłoszenie' }}</button></form></section>{% endif %}</aside></div>{% endblock %}
+
+{% block content %}
+  {# ---------------------------------------------------------------------------
+     1. CONTEXT-AWARE BACK LINK
+     Returns the user to the most logical list based on the report's state:
+       - Unapproved + Admin  -> `/admin` (Moderation queue)
+       - Unapproved + Author -> `/my-reports`
+       - Approved (Public)   -> `/` (Public dashboard)
+     --------------------------------------------------------------------------- #}
+  <a class="back-link"
+     href="{{ url_for('admin_panel') if admin and not report.approved else url_for('my_reports') if not report.approved else url_for('index') }}">
+    {{ icon('arrow-left') }} Wróć do listy zgłoszeń
+  </a>
+
+  {# ---------------------------------------------------------------------------
+     2. REPORT HEADER & STATUS BADGES
+     --------------------------------------------------------------------------- #}
+  <div class="detail-heading">
+    <div class="eyebrow">
+      CD-{{ '%03d'|format(report.id) }} <span class="separator">/</span> ZGŁOSZENIE PODATNOŚCI
+    </div>
+    <h1>{{ report.title }}</h1>
+    <div class="detail-tags">
+      {{ badge(report) }}
+      {{ status_badge(report) }}
+      {% if not report.approved %}
+        <span class="pending-label">{{ icon('clock') }} Oczekuje na akceptację</span>
+      {% endif %}
+    </div>
+  </div>
+
+  {# Moderation notice shown only while the report is still hidden from the public. #}
+  {% if not report.approved %}
+    <div class="inline-info pending-info">
+      {{ icon('info') }}
+      <span>To zgłoszenie jest widoczne tylko dla autora i administratora. Komentowanie będzie dostępne po publikacji.</span>
+    </div>
+  {% endif %}
+
+  {# ---------------------------------------------------------------------------
+     3. TWO-COLUMN DETAIL LAYOUT (Left: Description + Comments | Right: Meta + Admin)
+     --------------------------------------------------------------------------- #}
+  <div class="detail-layout">
+    <div>
+      {# Full vulnerability description (styled with `white-space: pre-wrap` in
+         app.css so line breaks are preserved without allowing raw HTML/XSS). #}
+      <section class="panel detail-description">
+        <div class="section-title">
+          {{ icon('file') }}
+          <h2>Opis podatności</h2>
+        </div>
+        <div class="report-description">{{ report.description }}</div>
+      </section>
+
+      {# -----------------------------------------------------------------------
+         DISCUSSION / COMMENTS SECTION
+         `id="comments"` is the anchor target that `add_comment()` and
+         `delete_comment()` in app.py redirect back to (`#comments`).
+         ----------------------------------------------------------------------- #}
+      <section class="panel comments-panel" id="comments">
+        <div class="section-title">
+          {{ icon('message') }}
+          <h2>Dyskusja <span class="count">{{ comments|length }}</span></h2>
+        </div>
+
+        {% for c in comments %}
+          <article class="comment">
+            <span class="avatar comment-avatar">{{ c.author[0]|upper }}</span>
+            <div class="comment-body">
+              <div class="comment-meta">
+                <strong>{{ c.author }}</strong>
+                <span>{{ c.created_at|shortdate }}</span>
+
+                {# Delete button shown only to admins or the comment's own author.
+                   `data-confirm` is intercepted by `static/app.js` to show a
+                   confirmation dialog without violating the strict CSP. #}
+                {% if g.user and (admin or c.author==g.user.username) %}
+                  <form method="post"
+                        action="{{ url_for('delete_comment', comment_id=c.id) }}"
+                        data-confirm="Usunąć ten komentarz?">
+                    {{ csrf() }}
+                    <button class="text-button danger-text" aria-label="Usuń komentarz {{ c.id }}">Usuń</button>
+                  </form>
+                {% endif %}
+              </div>
+              <p>{{ c.content }}</p>
+            </div>
+          </article>
+        {% else %}
+          <p class="muted comment-empty">Nie ma jeszcze komentarzy. Rozpocznij dyskusję.</p>
+        {% endfor %}
+
+        {# Comment submission form:
+           - Logged-in user + approved report -> show form.
+           - Logged-out visitor -> prompt to log in.
+           - Logged-in user + unapproved report -> hidden (explained by top banner). #}
+        {% if g.user and report.approved %}
+          <form method="post"
+                action="{{ url_for('add_comment', report_id=report.id) }}"
+                class="stack-form comment-form">
+            {{ csrf() }}
+            <label for="content">Dodaj komentarz</label>
+            <textarea id="content" name="content" required maxlength="2000" rows="3"
+                      placeholder="Dodaj informacje, które pomogą w analizie…"></textarea>
+            <div class="comment-submit">
+              <small>Maksymalnie 2000 znaków.</small>
+              <button class="button button-primary button-small">{{ icon('send') }} Dodaj komentarz</button>
+            </div>
+          </form>
+        {% elif not g.user %}
+          <div class="inline-info">
+            {{ icon('login') }}
+            <span><a href="{{ url_for('login') }}">Zaloguj się</a>, aby dołączyć do dyskusji.</span>
+          </div>
+        {% endif %}
+      </section>
+    </div>
+
+    {# -------------------------------------------------------------------------
+       RIGHT SIDEBAR: METADATA & ADMIN MODERATION CONTROLS
+       ------------------------------------------------------------------------- #}
+    <aside class="detail-aside">
+      <section class="panel metadata-panel">
+        <h2>Szczegóły</h2>
+        <dl>
+          <dt>Autor zgłoszenia</dt>
+          <dd class="author-cell">
+            <span class="mini-avatar">{{ report.author[0]|upper }}</span>{{ report.author }}
+          </dd>
+          <dt>Utworzono</dt>
+          <dd>{{ report.created_at|shortdate }}</dd>
+          <dt>Ostatnia zmiana</dt>
+          <dd>{{ report.updated_at|shortdate }}</dd>
+          <dt>Publikacja</dt>
+          <dd>
+            <span class="dot {{ 'green-dot' if report.approved else 'amber-dot' }}"></span>
+            {{ 'Opublikowane' if report.approved else 'Do akceptacji' }}
+          </dd>
+        </dl>
+
+        {# `can_edit` is computed in app.py (`is_admin() or author == current user`). #}
+        {% if can_edit %}
+          <a class="button button-light full-width" href="{{ url_for('edit_report', report_id=report.id) }}">
+            {{ icon('edit') }} Edytuj zgłoszenie
+          </a>
+        {% endif %}
+      </section>
+
+      {# Admin-only moderation panel (server-side protected by `@admin_required`). #}
+      {% if admin %}
+        <section class="panel moderation-panel">
+          <h2>{{ icon('check-shield') }} Moderacja</h2>
+
+          {# 1. Approve & publish pending report #}
+          {% if not report.approved %}
+            <form method="post" action="{{ url_for('approve_report', report_id=report.id) }}">
+              {{ csrf() }}
+              <button class="button button-primary full-width">
+                {{ icon('check-circle') }} Zaakceptuj i opublikuj
+              </button>
+            </form>
+          {% endif %}
+
+          {# 2. Update workflow status (Nowe -> W trakcie analizy -> Naprawione) #}
+          <form method="post" action="{{ url_for('change_status', report_id=report.id) }}" class="stack-form">
+            {{ csrf() }}
+            <div>
+              <label for="report_status">Status zgłoszenia</label>
+              <select id="report_status" name="status">
+                {% for s in statuses %}
+                  <option {{ 'selected' if report.status==s }}>{{ s }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <button class="button button-light full-width">Zapisz status</button>
+          </form>
+
+          {# 3. Permanently delete report (triggers ON DELETE CASCADE on comments) #}
+          <form method="post"
+                action="{{ url_for('delete_report', report_id=report.id) }}"
+                class="delete-form"
+                data-confirm="Usunąć zgłoszenie i wszystkie jego komentarze? Tej operacji nie można cofnąć.">
+            {{ csrf() }}
+            <button class="button button-danger-light full-width">
+              {{ icon('trash') }} {{ 'Odrzuć i usuń' if not report.approved else 'Usuń zgłoszenie' }}
+            </button>
+          </form>
+        </section>
+      {% endif %}
+    </aside>
+  </div>
+{% endblock %}
