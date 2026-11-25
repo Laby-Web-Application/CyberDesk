@@ -1,25 +1,224 @@
+{# =============================================================================
+   CyberDesk Reports Dashboard & Moderation List (templates/index.html)
+   Used by: ALL environments
+
+   Rendered by `listing(scope)` in app.py for three distinct routes:
+     - scope == 'all'   -> `/`           (Publicly approved reports)
+     - scope == 'mine'  -> `/my-reports` (Logged-in user's own reports)
+     - scope == 'admin' -> `/admin`      (Moderation queue: pending/approved/all)
+
+   Reusing one template avoids duplicating the stats grid, search/filter bar,
+   table markup, and pagination controls across three pages.
+   ============================================================================= #}
+
 {% extends 'base.html' %}
+
+{# Dynamic <title> and topbar breadcrumb based on which route rendered this view. #}
 {% block title %}{{ 'Moderacja' if scope=='admin' else 'Moje zgłoszenia' if scope=='mine' else 'Centrum zgłoszeń' }}{% endblock %}
 {% block breadcrumb %}{{ 'Moderacja' if scope=='admin' else 'Moje zgłoszenia' if scope=='mine' else 'Centrum zgłoszeń' }}{% endblock %}
+
 {% block content %}
-<div class="page-heading"><div><div class="eyebrow">BEZPIECZEŃSTWO POD KONTROLĄ</div><h1>{{ 'Panel moderacji' if scope=='admin' else 'Moje zgłoszenia' if scope=='mine' else 'Centrum zgłoszeń' }}</h1><p>{{ 'Weryfikuj zgłoszenia i zarządzaj ich publikacją.' if scope=='admin' else 'Śledź swoje zgłoszenia — od pierwszego opisu do rozwiązania.' if scope=='mine' else 'Jedno miejsce na zgłoszenia, analizę i skuteczne rozwiązania.' }}</p></div>
-<a class="button button-primary" href="{{ url_for('add_report') }}">{{ icon('plus') }} Zgłoś podatność</a></div>
-<section class="stats-grid" aria-label="Statystyki opublikowanych zgłoszeń">
-{% for label,value,type,desc,ico in [('Wszystkie zgłoszenia',stats.total,'blue','Opublikowane w projekcie','folder'),('Otwarte zgłoszenia',stats.active,'amber','Nowe i w trakcie analizy','activity'),('Krytyczne podatności',stats.critical,'red','Otwarte, najwyższy priorytet','alert'),('Naprawione',stats.fixed,'green','Zamknięte zgłoszenia','check-circle')] %}
-<div class="stat-card"><div class="stat-top"><span>{{ label }}</span><span class="stat-icon {{ type }}">{{ icon(ico) }}</span></div><div class="stat-value">{{ value }}</div><div class="stat-description">{% if type=='green' %}<span class="dot green-dot"></span>{% endif %}{{ desc }}</div></div>{% endfor %}
-</section>
-{% if scope=='admin' %}<div class="tabs" aria-label="Stan publikacji">{% for value,label in [('pending','Do akceptacji'),('approved','Opublikowane'),('all','Wszystkie')] %}<a class="{{ 'selected' if request.args.get('moderation','pending')==value }}" href="{{ url_for('admin_panel',moderation=value) }}">{{ label }}{% if value=='pending' %}<span>{{ pending }}</span>{% endif %}</a>{% endfor %}</div>{% endif %}
-<section class="panel reports-panel"><div class="panel-heading"><div><h2>{{ 'Zgłoszenia do weryfikacji' if scope=='admin' and request.args.get('moderation','pending')=='pending' else 'Twoje zgłoszenia' if scope=='mine' else 'Lista zgłoszeń' }}<span class="count">{{ total }}</span></h2><p>{{ 'Autorzy widzą własne wpisy przed akceptacją. Publikacja jest decyzją administratora.' if scope=='admin' else 'Bądź na bieżąco z bezpieczeństwem projektu.' }}</p></div><span class="muted small">Najnowsze jako pierwsze</span></div>
-<form method="get" class="filters" aria-label="Filtry zgłoszeń">
-{% if scope=='admin' %}<input type="hidden" name="moderation" value="{{ request.args.get('moderation','pending') }}">{% endif %}
-<div class="search-field">{{ icon('search') }}<label class="visually-hidden" for="q">Szukaj zgłoszeń</label><input id="q" type="search" name="q" value="{{ request.args.get('q','') }}" placeholder="Szukaj po tytule lub opisie…" maxlength="150"></div>
-<label class="visually-hidden" for="severity">Poziom zagrożenia</label><select name="severity" id="severity"><option value="">Każdy poziom</option>{% for s in severities %}<option {{ 'selected' if request.args.get('severity')==s }}>{{ s }}</option>{% endfor %}</select>
-<label class="visually-hidden" for="status">Status</label><select name="status" id="status"><option value="">Każdy status</option>{% for s in statuses %}<option {{ 'selected' if request.args.get('status')==s }}>{{ s }}</option>{% endfor %}</select><button class="button button-light">{{ icon('filter') }} Filtruj</button>
-{% if request.args.get('q') or request.args.get('severity') or request.args.get('status') %}<a class="clear-filter" href="{{ url_for(request.endpoint) }}">Wyczyść</a>{% endif %}</form>
-<div class="table-scroll"><table class="reports-table"><thead><tr><th>Zgłoszenie</th><th>Poziom zagrożenia</th><th>Status</th><th>Autor</th><th>Dodano</th><th><span class="visually-hidden">Otwórz</span></th></tr></thead><tbody>
-{% for report in reports %}<tr><td><a class="report-link" href="{{ url_for('report_detail',report_id=report.id) }}"><span class="report-id">CD-{{ '%03d'|format(report.id) }}</span><strong>{{ report.title }}</strong></a><div class="row-sub">{{ icon('message') }} {{ report.comment_count }} komentarz{{ '' if report.comment_count==1 else 'e' if report.comment_count in [2,3,4] else 'y' }}{% if not report.approved %}<span class="pending-label">Oczekuje na akceptację</span>{% endif %}</div></td>
-<td>{{ badge(report) }}</td><td>{{ status_badge(report) }}</td><td><span class="author-cell"><span class="mini-avatar">{{ report.author[0]|upper }}</span>{{ report.author }}</span></td><td class="date-cell">{{ report.created_at|shortdate }}</td><td><a class="row-arrow" href="{{ url_for('report_detail',report_id=report.id) }}" aria-label="Otwórz zgłoszenie CD-{{ report.id }}">{{ icon('arrow-right') }}</a></td></tr>
-{% else %}<tr><td colspan="6"><div class="empty-state">{{ icon('folder') }}<h3>Brak zgłoszeń</h3><p>{{ 'Zmień filtry lub dodaj pierwsze zgłoszenie.' if scope!='admin' else 'Nie ma zgłoszeń spełniających te kryteria.' }}</p>{% if scope!='admin' %}<a href="{{ url_for('add_report') }}" class="button button-primary">{{ icon('plus') }} Dodaj zgłoszenie</a>{% endif %}</div></td></tr>{% endfor %}
-</tbody></table></div><div class="table-footer"><span>Liczba zgłoszeń: {{ total }} · strona {{ page }} z {{ pages }}</span><div class="pagination-controls">{% if page>1 %}<a class="button button-light button-small" href="{{ page_url(page-1) }}">Poprzednia</a>{% endif %}{% if page<pages %}<a class="button button-light button-small" href="{{ page_url(page+1) }}">Następna {{ icon('arrow-right') }}</a>{% endif %}</div></div></section>
-<div class="bottom-note">{{ icon('info') }}<p><strong>Dobre zgłoszenie przyspiesza naprawę.</strong> Dodaj dokładny opis, kroki odtworzenia i właściwy poziom zagrożenia.</p></div>
+  {# ---------------------------------------------------------------------------
+     1. PAGE HEADER & PRIMARY CTA
+     --------------------------------------------------------------------------- #}
+  <div class="page-heading">
+    <div>
+      <div class="eyebrow">BEZPIECZEŃSTWO POD KONTROLĄ</div>
+      <h1>{{ 'Panel moderacji' if scope=='admin' else 'Moje zgłoszenia' if scope=='mine' else 'Centrum zgłoszeń' }}</h1>
+      <p>
+        {{ 'Weryfikuj zgłoszenia i zarządzaj ich publikacją.' if scope=='admin'
+           else 'Śledź swoje zgłoszenia — od pierwszego opisu do rozwiązania.' if scope=='mine'
+           else 'Jedno miejsce na zgłoszenia, analizę i skuteczne rozwiązania.' }}
+      </p>
+    </div>
+    <a class="button button-primary" href="{{ url_for('add_report') }}">{{ icon('plus') }} Zgłoś podatność</a>
+  </div>
+
+  {# ---------------------------------------------------------------------------
+     2. KPI STATISTICS GRID
+     Displays aggregate counts (`stats`) computed over publicly approved reports.
+     Looping over a tuple list keeps the 4 cards DRY (Don't Repeat Yourself).
+     --------------------------------------------------------------------------- #}
+  <section class="stats-grid" aria-label="Statystyki opublikowanych zgłoszeń">
+    {% for label, value, type, desc, ico in [
+      ('Wszystkie zgłoszenia', stats.total,    'blue',  'Opublikowane w projekcie',     'folder'),
+      ('Otwarte zgłoszenia',   stats.active,   'amber', 'Nowe i w trakcie analizy',     'activity'),
+      ('Krytyczne podatności', stats.critical, 'red',   'Otwarte, najwyższy priorytet', 'alert'),
+      ('Naprawione',           stats.fixed,    'green', 'Zamknięte zgłoszenia',         'check-circle')
+    ] %}
+      <div class="stat-card">
+        <div class="stat-top">
+          <span>{{ label }}</span>
+          <span class="stat-icon {{ type }}">{{ icon(ico) }}</span>
+        </div>
+        <div class="stat-value">{{ value }}</div>
+        <div class="stat-description">
+          {% if type=='green' %}<span class="dot green-dot"></span>{% endif %}{{ desc }}
+        </div>
+      </div>
+    {% endfor %}
+  </section>
+
+  {# ---------------------------------------------------------------------------
+     3. ADMIN MODERATION TABS (Visible only on `/admin`)
+     Switches the `?moderation=` query parameter between pending, approved, and all.
+     --------------------------------------------------------------------------- #}
+  {% if scope=='admin' %}
+    <div class="tabs" aria-label="Stan publikacji">
+      {% for value, label in [('pending', 'Do akceptacji'), ('approved', 'Opublikowane'), ('all', 'Wszystkie')] %}
+        <a class="{{ 'selected' if request.args.get('moderation', 'pending')==value }}"
+           href="{{ url_for('admin_panel', moderation=value) }}">
+          {{ label }}{% if value=='pending' %}<span>{{ pending }}</span>{% endif %}
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {# ---------------------------------------------------------------------------
+     4. REPORTS PANEL (Search/Filter Bar + Table + Pagination)
+     --------------------------------------------------------------------------- #}
+  <section class="panel reports-panel">
+    <div class="panel-heading">
+      <div>
+        <h2>
+          {{ 'Zgłoszenia do weryfikacji' if scope=='admin' and request.args.get('moderation', 'pending')=='pending'
+             else 'Twoje zgłoszenia' if scope=='mine'
+             else 'Lista zgłoszeń' }}
+          <span class="count">{{ total }}</span>
+        </h2>
+        <p>
+          {{ 'Autorzy widzą własne wpisy przed akceptacją. Publikacja jest decyzją administratora.' if scope=='admin'
+             else 'Bądź na bieżąco z bezpieczeństwem projektu.' }}
+        </p>
+      </div>
+      <span class="muted small">Najnowsze jako pierwsze</span>
+    </div>
+
+    {# GET Filter Form:
+       Uses `method="get"` (no CSRF token needed for read-only searches) so filtered
+       views are bookmarkable and shareable via URL query parameters. #}
+    <form method="get" class="filters" aria-label="Filtry zgłoszeń">
+      {# Keep the active admin tab selected when submitting a search/filter. #}
+      {% if scope=='admin' %}
+        <input type="hidden" name="moderation" value="{{ request.args.get('moderation', 'pending') }}">
+      {% endif %}
+
+      <div class="search-field">
+        {{ icon('search') }}
+        <label class="visually-hidden" for="q">Szukaj zgłoszeń</label>
+        <input id="q" type="search" name="q" value="{{ request.args.get('q', '') }}"
+               placeholder="Szukaj po tytule lub opisie…" maxlength="150">
+      </div>
+
+      <label class="visually-hidden" for="severity">Poziom zagrożenia</label>
+      <select name="severity" id="severity">
+        <option value="">Każdy poziom</option>
+        {% for s in severities %}
+          <option {{ 'selected' if request.args.get('severity')==s }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+
+      <label class="visually-hidden" for="status">Status</label>
+      <select name="status" id="status">
+        <option value="">Każdy status</option>
+        {% for s in statuses %}
+          <option {{ 'selected' if request.args.get('status')==s }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+
+      <button class="button button-light">{{ icon('filter') }} Filtruj</button>
+
+      {# Show a "Wyczyść" reset link only when at least one filter is active.
+         In admin view, preserve the current `moderation` tab instead of resetting to pending. #}
+      {% if request.args.get('q') or request.args.get('severity') or request.args.get('status') %}
+        <a class="clear-filter"
+           href="{{ url_for(request.endpoint, moderation=request.args.get('moderation', 'pending')) if scope=='admin' else url_for(request.endpoint) }}">
+          Wyczyść
+        </a>
+      {% endif %}
+    </form>
+
+    {# Responsive scrollable wrapper so the table doesn't break narrow mobile screens. #}
+    <div class="table-scroll">
+      <table class="reports-table">
+        <thead>
+          <tr>
+            <th>Zgłoszenie</th>
+            <th>Poziom zagrożenia</th>
+            <th>Status</th>
+            <th>Autor</th>
+            <th>Dodano</th>
+            <th><span class="visually-hidden">Otwórz</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for report in reports %}
+            <tr>
+              <td>
+                <a class="report-link" href="{{ url_for('report_detail', report_id=report.id) }}">
+                  {# Zero-pads the numeric ID for readability (e.g., 7 -> CD-007). #}
+                  <span class="report-id">CD-{{ '%03d'|format(report.id) }}</span>
+                  <strong>{{ report.title }}</strong>
+                </a>
+                <div class="row-sub">
+                  {# Full Polish pluralization rules:
+                     1 -> komentarz | 2-4, 22-24, ... (excluding 12-14) -> komentarze | rest -> komentarzy #}
+                  {{ icon('message') }} {{ report.comment_count }} komentarz{{ '' if report.comment_count==1 else 'e' if report.comment_count % 10 in [2,3,4] and report.comment_count % 100 not in [12,13,14] else 'y' }}
+                  {% if not report.approved %}
+                    <span class="pending-label">Oczekuje na akceptację</span>
+                  {% endif %}
+                </div>
+              </td>
+              {# Macros inherited from base.html #}
+              <td>{{ badge(report) }}</td>
+              <td>{{ status_badge(report) }}</td>
+              <td>
+                <span class="author-cell">
+                  <span class="mini-avatar">{{ report.author[0]|upper }}</span>{{ report.author }}
+                </span>
+              </td>
+              {# `shortdate` filter in app.py converts UTC timestamp to Europe/Warsaw. #}
+              <td class="date-cell">{{ report.created_at|shortdate }}</td>
+              <td>
+                <a class="row-arrow" href="{{ url_for('report_detail', report_id=report.id) }}"
+                   aria-label="Otwórz zgłoszenie CD-{{ report.id }}">{{ icon('arrow-right') }}</a>
+              </td>
+            </tr>
+          {% else %}
+            {# Jinja2 `for ... else` renders this fallback when `reports` is empty. #}
+            <tr>
+              <td colspan="6">
+                <div class="empty-state">
+                  {{ icon('folder') }}
+                  <h3>Brak zgłoszeń</h3>
+                  <p>{{ 'Zmień filtry lub dodaj pierwsze zgłoszenie.' if scope!='admin' else 'Nie ma zgłoszeń spełniających te kryteria.' }}</p>
+                  {% if scope!='admin' %}
+                    <a href="{{ url_for('add_report') }}" class="button button-primary">{{ icon('plus') }} Dodaj zgłoszenie</a>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {# Pagination footer: `page_url(n)` in app.py preserves active search/filter params. #}
+    <div class="table-footer">
+      <span>Liczba zgłoszeń: {{ total }} · strona {{ page }} z {{ pages }}</span>
+      <div class="pagination-controls">
+        {% if page > 1 %}
+          <a class="button button-light button-small" href="{{ page_url(page - 1) }}">Poprzednia</a>
+        {% endif %}
+        {% if page < pages %}
+          <a class="button button-light button-small" href="{{ page_url(page + 1) }}">Następna {{ icon('arrow-right') }}</a>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  <div class="bottom-note">
+    {{ icon('info') }}
+    <p><strong>Dobre zgłoszenie przyspiesza naprawę.</strong> Dodaj dokładny opis, kroki odtworzenia i właściwy poziom zagrożenia.</p>
+  </div>
 {% endblock %}
