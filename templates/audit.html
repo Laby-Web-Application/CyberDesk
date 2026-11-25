@@ -1,2 +1,129 @@
-{% extends 'base.html' %}{% block title %}Dziennik zdarzeń{% endblock %}{% block breadcrumb %}Dziennik zdarzeń{% endblock %}
-{% block content %}<div class="page-heading"><div><div class="eyebrow">ADMINISTRACJA</div><h1>Dziennik zdarzeń</h1><p>Ostatnie 100 zmian dotyczących zgłoszeń i komentarzy.</p></div></div><section class="panel"><div class="table-scroll"><table class="reports-table audit-table"><thead><tr><th>Data</th><th>Użytkownik</th><th>Zdarzenie</th><th>Zgłoszenie</th><th>Szczegóły</th></tr></thead><tbody>{% for e in events %}<tr><td>{{ e.created_at|shortdate }}</td><td>{{ e.actor }}</td><td>{{ e.event }}</td><td>{{ 'CD-%03d'|format(e.report_id) if e.report_id else '—' }}</td><td>{{ e.detail or '—' }}</td></tr>{% else %}<tr><td colspan="5"><div class="empty-state">{{ icon('activity') }}<h3>Brak zdarzeń</h3><p>Nowe działania pojawią się tutaj automatycznie.</p></div></td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}
+{# =============================================================================
+   CyberDesk Authentication Page — Login & Registration (templates/auth.html)
+   Used by: ALL environments
+
+   Dual-Mode Template:
+     - `mode == 'login'`    -> rendered by `login()`    (`/login`)
+     - `mode == 'register'` -> rendered by `register()` (`/register`)
+
+   Security & UX Highlights:
+     - CSRF Protection: `{{ csrf() }}` embeds the session token validated by
+       `protect_request()` in app.py.
+     - Password Hygiene: Notice `username` repopulates on validation errors, but
+       `password` NEVER has a `value="..."` attribute—passwords must never be
+       echoed back into rendered HTML.
+     - Password Manager Support: Uses standard `autocomplete` hints (`username`,
+       `current-password`, `new-password`) so browsers and password managers
+       autofill or suggest strong passwords accurately.
+     - CSP-Safe JS Hook: `.password-toggle` with `data-target="password"` is
+       handled externally by `static/app.js` (no inline `onclick`).
+   ============================================================================= #}
+
+{% extends 'base.html' %}
+
+{% block title %}{{ 'Rejestracja' if mode=='register' else 'Logowanie' }}{% endblock %}
+{% block breadcrumb %}{{ 'Utwórz konto' if mode=='register' else 'Logowanie' }}{% endblock %}
+
+{% block content %}
+  <div class="auth-layout">
+    {# -------------------------------------------------------------------------
+       LEFT COLUMN: MARKETING / VALUE PROPOSITION PANEL
+       ------------------------------------------------------------------------- #}
+    <section class="auth-intro">
+      <div class="eyebrow">TWÓJ WKŁAD W BEZPIECZEŃSTWO</div>
+      <h1>Małe zgłoszenie.<br>Duża różnica.</h1>
+      <p>Pomóż wykrywać problemy, dziel się wiedzą i obserwuj, jak zgłoszenia zamieniają się w rozwiązania.</p>
+
+      <div class="auth-features">
+        <p>{{ icon('check-circle') }} Wszystkie zgłoszenia w jednym miejscu</p>
+        <p>{{ icon('check-circle') }} Przejrzysty status każdej podatności</p>
+        <p>{{ icon('check-circle') }} Współpraca i moderowana dyskusja</p>
+      </div>
+
+      <div class="auth-graphic">
+        {{ icon('shield') }}
+        <span>CyberDesk</span>
+        <small>Zgłaszaj. Analizuj. Naprawiaj.</small>
+      </div>
+    </section>
+
+    {# -------------------------------------------------------------------------
+       RIGHT COLUMN: AUTHENTICATION FORM CARD
+       ------------------------------------------------------------------------- #}
+    <section class="panel auth-card">
+      <span class="auth-lock">{{ icon('login') }}</span>
+      <h2>{{ 'Utwórz konto' if mode=='register' else 'Witaj ponownie' }}</h2>
+      <p class="muted">
+        {{ 'Zacznij zgłaszać podatności w projekcie.' if mode=='register'
+           else 'Zaloguj się do swojej przestrzeni CyberDesk.' }}
+      </p>
+
+      {# `url_for(mode)` dynamically resolves to `/login` or `/register`. #}
+      <form method="post" action="{{ url_for(mode) }}" class="stack-form">
+        {{ csrf() }}
+
+        <div>
+          <label for="username">Login</label>
+          {# Repopulates `username` if login/register fails so the user doesn't have to retype it. #}
+          <input id="username" name="username" required minlength="3" maxlength="50"
+                 autocomplete="username" value="{{ request.form.get('username', '') }}"
+                 placeholder="Twój login">
+          {% if mode=='register' %}
+            <small>3–50 znaków: litery a–z, cyfry, kropka, - lub _.</small>
+          {% endif %}
+        </div>
+
+        <div>
+          <label for="password">Hasło</label>
+          <div class="password-field">
+            {# `maxlength="128"` mirrors app.py's DoS protection cap on password hashing.
+               `minlength="10"` is enforced on registration only (so existing legacy accounts
+               with shorter passwords could still log in if any existed). #}
+            <input id="password" type="password" name="password" required maxlength="128"
+                   {% if mode=='register' %}minlength="10" autocomplete="new-password"{% else %}autocomplete="current-password"{% endif %}
+                   placeholder="{{ 'Minimum 10 znaków' if mode=='register' else 'Twoje hasło' }}">
+            {# Wired to `static/app.js`: toggles `#password` between masked and plain text. #}
+            <button type="button" class="password-toggle" aria-label="Pokaż hasło"
+                    aria-pressed="false" data-target="password">{{ icon('eye') }}</button>
+          </div>
+        </div>
+
+        {# Password confirmation field shown only during registration. #}
+        {% if mode=='register' %}
+          <div>
+            <label for="confirm_password">Powtórz hasło</label>
+            <input id="confirm_password" type="password" name="confirm_password" required
+                   minlength="10" maxlength="128" autocomplete="new-password"
+                   placeholder="Wpisz hasło ponownie">
+          </div>
+        {% endif %}
+
+        <button class="button button-primary full-width">
+          {{ 'Zarejestruj się' if mode=='register' else 'Zaloguj się' }} {{ icon('arrow-right') }}
+        </button>
+      </form>
+
+      {# Toggle link between Login and Register pages. #}
+      <p class="auth-switch">
+        {{ 'Masz już konto?' if mode=='register' else 'Nie masz konta?' }}
+        <a href="{{ url_for('login' if mode=='register' else 'register') }}">
+          {{ 'Zaloguj się' if mode=='register' else 'Utwórz konto' }}
+        </a>
+      </p>
+
+      {# Shown ONLY on `/login` when `DEMO_MODE=1` is active (injected by app.py). #}
+      {% if demo and mode=='login' %}
+        <details class="demo-accounts" open>
+          <summary>Konta demonstracyjne</summary>
+          <dl>
+            <dt>Administrator</dt>
+            <dd><code>admin</code> / <code>CyberDeskAdmin!2026</code></dd>
+            <dt>Użytkownik</dt>
+            <dd><code>user</code> / <code>CyberDeskUser!2026</code></dd>
+          </dl>
+          <p>Możesz też utworzyć własne konto.</p>
+        </details>
+      {% endif %}
+    </section>
+  </div>
+{% endblock %}
