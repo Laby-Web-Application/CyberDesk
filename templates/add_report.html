@@ -1,11 +1,109 @@
-{% extends 'base.html' %}{% block title %}{{ 'Edytuj zgłoszenie' if report else 'Nowe zgłoszenie' }}{% endblock %}
+{# =============================================================================
+   CyberDesk Create & Edit Report Form (templates/add_report.html)
+   Used by: ALL environments
+
+   Dual-Purpose Template:
+     - Create mode (`report` is None) -> rendered by `add_report()` (`/add_report`)
+     - Edit mode (`report` is a dict) -> rendered by `edit_report()` (`/reports/<id>/edit`)
+
+   Key UX & Security Patterns:
+     - Form Repopulation: `request.form.get('title', report.title if report else '')`
+       ensures that if server-side validation fails (HTTP 400), the user's typed
+       text is preserved instead of wiped out.
+     - Defense-in-Depth Validation: HTML5 attributes (`required`, `minlength`,
+       `maxlength`) give instant browser feedback, while `report_values()` in
+       app.py re-validates everything server-side.
+     - CSRF Protection: `{{ csrf() }}` embeds the session token validated by
+       `protect_request()` in app.py.
+   ============================================================================= #}
+
+{% extends 'base.html' %}
+
+{% block title %}{{ 'Edytuj zgłoszenie' if report else 'Nowe zgłoszenie' }}{% endblock %}
 {% block breadcrumb %}{{ 'Edycja zgłoszenia' if report else 'Nowe zgłoszenie' }}{% endblock %}
-{% block content %}<a class="back-link" href="{{ url_for('report_detail',report_id=report.id) if report else url_for('my_reports') }}">{{ icon('arrow-left') }} {{ 'Wróć do zgłoszenia' if report else 'Moje zgłoszenia' }}</a>
-<div class="page-heading"><div><div class="eyebrow">{{ 'CD-%03d'|format(report.id) if report else 'POMÓŻ ZWIĘKSZYĆ BEZPIECZEŃSTWO' }}</div><h1>{{ 'Edytuj zgłoszenie' if report else 'Zgłoś podatność' }}</h1><p>Im dokładniejszy opis, tym szybsza analiza problemu.</p></div></div>
-<div class="form-layout"><section class="panel form-panel"><h2>{{ 'Dane zgłoszenia' if report else 'Opisz wykryty problem' }}</h2>
-<form method="post" class="stack-form">{{ csrf() }}<div><label for="title">Tytuł zgłoszenia <span class="required">*</span></label><input id="title" name="title" required minlength="3" maxlength="150" value="{{ request.form.get('title',report.title if report else '') }}" placeholder="Np. Nieautoryzowany dostęp do dokumentów"><small>Krótko i konkretnie. Maksymalnie 150 znaków.</small></div>
-<div><label for="severity">Poziom zagrożenia <span class="required">*</span></label><select id="severity" name="severity" required>{% for s in severities %}<option {{ 'selected' if request.form.get('severity',report.severity if report else 'Średnia')==s }}>{{ s }}</option>{% endfor %}</select></div>
-<div><label for="description">Szczegółowy opis <span class="required">*</span></label><textarea id="description" name="description" required minlength="10" maxlength="10000" rows="10" placeholder="Co się dzieje? Jak odtworzyć problem? Jakie powinno być prawidłowe zachowanie?">{{ request.form.get('description',report.description if report else '') }}</textarea><small>10–10 000 znaków. Opisy są wyświetlane jako zwykły tekst.</small></div>
-{% if not admin %}<div class="inline-info">{{ icon('info') }}<span>{{ 'Po edycji zgłoszenie wróci do moderacji i otrzyma status „Nowe”.' if report else 'Zgłoszenie pojawi się publicznie po akceptacji administratora. Do tego czasu znajdziesz je w „Moje zgłoszenia”.' }}</span></div>{% endif %}
-<div class="form-actions"><a class="button button-light" href="{{ url_for('report_detail',report_id=report.id) if report else url_for('my_reports') }}">Anuluj</a><button class="button button-primary">{{ icon('check-circle' if report else 'plus') }} {{ 'Zapisz zmiany' if report else 'Wyślij zgłoszenie' }}</button></div></form></section>
-<aside class="form-help"><div class="help-icon">{{ icon('shield') }}</div><h3>Co zawrzeć w opisie?</h3><ol><li><strong>Miejsce występowania</strong><p>Moduł, adres lub funkcja aplikacji.</p></li><li><strong>Kroki odtworzenia</strong><p>Krótka instrukcja pozwalająca powtórzyć problem.</p></li><li><strong>Możliwy wpływ</strong><p>Jakie dane lub działania są zagrożone?</p></li><li><strong>Oczekiwane zachowanie</strong><p>Jak system powinien się zachować?</p></li></ol><div class="help-note">Nie umieszczaj w zgłoszeniu prawdziwych haseł ani danych osobowych.</div></aside></div>{% endblock %}
+
+{% block content %}
+  {# Context-aware back link: returns to the report detail page when editing,
+     or to `/my-reports` when creating a new report. #}
+  <a class="back-link"
+     href="{{ url_for('report_detail', report_id=report.id) if report else url_for('my_reports') }}">
+    {{ icon('arrow-left') }} {{ 'Wróć do zgłoszenia' if report else 'Moje zgłoszenia' }}
+  </a>
+
+  <div class="page-heading">
+    <div>
+      <div class="eyebrow">{{ 'CD-%03d'|format(report.id) if report else 'POMÓŻ ZWIĘKSZYĆ BEZPIECZEŃSTWO' }}</div>
+      <h1>{{ 'Edytuj zgłoszenie' if report else 'Zgłoś podatność' }}</h1>
+      <p>Im dokładniejszy opis, tym szybsza analiza problemu.</p>
+    </div>
+  </div>
+
+  {# Two-column layout: Left = Report Form | Right = Writing Guidelines Sidebar #}
+  <div class="form-layout">
+    <section class="panel form-panel">
+      <h2>{{ 'Dane zgłoszenia' if report else 'Opisz wykryty problem' }}</h2>
+
+      {# Omitting `action="..."` submits the POST request back to the current URL
+         (`/add_report` or `/reports/<id>/edit`), letting one form serve both routes. #}
+      <form method="post" class="stack-form">
+        {{ csrf() }}
+
+        <div>
+          <label for="title">Tytuł zgłoszenia <span class="required">*</span></label>
+          <input id="title" name="title" required minlength="3" maxlength="150"
+                 value="{{ request.form.get('title', report.title if report else '') }}"
+                 placeholder="Np. Nieautoryzowany dostęp do dokumentów">
+          <small>Krótko i konkretnie. Maksymalnie 150 znaków.</small>
+        </div>
+
+        <div>
+          <label for="severity">Poziom zagrożenia <span class="required">*</span></label>
+          {# Populated from the `severities` allowlist injected by app.py's context_processor.
+             Defaults to 'Średnia' when creating a brand-new report. #}
+          <select id="severity" name="severity" required>
+            {% for s in severities %}
+              <option {{ 'selected' if request.form.get('severity', report.severity if report else 'Średnia')==s }}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div>
+          <label for="description">Szczegółowy opis <span class="required">*</span></label>
+          <textarea id="description" name="description" required minlength="10" maxlength="10000" rows="10"
+                    placeholder="Co się dzieje? Jak odtworzyć problem? Jakie powinno być prawidłowe zachowanie?">{{ request.form.get('description', report.description if report else '') }}</textarea>
+          <small>10–10 000 znaków. Opisy są wyświetlane jako zwykły tekst.</small>
+        </div>
+
+        {# Moderation notice for regular users: warns them that new reports wait
+           for admin approval, and edited reports re-enter moderation with status 'Nowe'. #}
+        {% if not admin %}
+          <div class="inline-info">
+            {{ icon('info') }}
+            <span>{{ 'Po edycji zgłoszenie wróci do moderacji i otrzyma status „Nowe”.' if report else 'Zgłoszenie pojawi się publicznie po akceptacji administratora. Do tego czasu znajdziesz je w „Moje zgłoszenia”.' }}</span>
+          </div>
+        {% endif %}
+
+        <div class="form-actions">
+          <a class="button button-light"
+             href="{{ url_for('report_detail', report_id=report.id) if report else url_for('my_reports') }}">Anuluj</a>
+          <button class="button button-primary">
+            {{ icon('check-circle' if report else 'plus') }} {{ 'Zapisz zmiany' if report else 'Wyślij zgłoszenie' }}
+          </button>
+        </div>
+      </form>
+    </section>
+
+    {# Helpful checklist guiding reporters on how to write actionable vulnerability reports. #}
+    <aside class="form-help">
+      <div class="help-icon">{{ icon('shield') }}</div>
+      <h3>Co zawrzeć w opisie?</h3>
+      <ol>
+        <li><strong>Miejsce występowania</strong><p>Moduł, adres lub funkcja aplikacji.</p></li>
+        <li><strong>Kroki odtworzenia</strong><p>Krótka instrukcja pozwalająca powtórzyć problem.</p></li>
+        <li><strong>Możliwy wpływ</strong><p>Jakie dane lub działania są zagrożone?</p></li>
+        <li><strong>Oczekiwane zachowanie</strong><p>Jak system powinien się zachować?</p></li>
+      </ol>
+      <div class="help-note">Nie umieszczaj w zgłoszeniu prawdziwych haseł ani danych osobowych.</div>
+    </aside>
+  </div>
+{% endblock %}
